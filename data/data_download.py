@@ -22,7 +22,7 @@ for year in years:
     r = requests.get(url, allow_redirects=True, stream=True)
     # save zip file
     z = zipfile.ZipFile(io.BytesIO(r.content))
-    z.extractall(save_path)
+    z.extractall(str(save_path + '/'))
 
 
 
