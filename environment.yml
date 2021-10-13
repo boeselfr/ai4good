@@ -1,0 +1,6 @@
+name: ai4good
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - geopandas=0.10.1
