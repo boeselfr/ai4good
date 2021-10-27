@@ -45,7 +45,8 @@
    "hash": "1f29b3b476751f6839fd006815e784e36762a848ecd053bdbad9cac15b3615be"
   },
   "kernelspec": {
-   "display_name": "Python 3.8.12 64-bit ('ai4good': conda)",
+   "display_name": "Python 3",
+   "language": "python",
    "name": "python3"
   },
   "language_info": {
@@ -58,9 +59,8 @@
    "name": "python",
    "nbconvert_exporter": "python",
    "pygments_lexer": "ipython3",
-   "version": "3.8.12"
-  },
-  "orig_nbformat": 4
+   "version": "3.8.2"
+  }
  },
  "nbformat": 4,
  "nbformat_minor": 2
