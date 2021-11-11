@@ -7,7 +7,6 @@ def export_image_collection_to_gdrive(
     image_collection: ee.ImageCollection,
     folder: str,
     scale: int = 40,
-    region: ee.Geometry.Polygon = None,
 ):
     """Exports the given image collection to Google Drive.
     Each image is saved as a separate GeoTIFF file.
@@ -36,7 +35,6 @@ def export_image_collection_to_gdrive(
             description=image_id,
             fileNamePrefix=image_id,
             image=image.toFloat(),  # Convert to float before starting the task
-            region=region,
             folder=folder,
             scale=scale,
             crs=GEE_DEFAULT_CRS,
