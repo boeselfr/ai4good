@@ -79,9 +79,9 @@ def train(model, train_loader, val_loader, learning_rate, epochs, device, pos_we
         for batch in pbar:
             # load image and mask into device memory based on two images in one tif now
             batch = np.nan_to_num(batch)
-            image_19 = torch.from_numpy(batch[:,0:2,:,:])
-            image_20 = torch.from_numpy(batch[:,4:6,:,:])
-            image = torch.cat((image_19,image_20), 1).to(device)
+            image = torch.from_numpy(batch[:,0:2,:,:])
+            #image_20 = torch.from_numpy(batch[:,4:6,:,:])
+            #image = torch.cat((image_19,image_20), 1).to(device)
             mask = torch.from_numpy(batch[:,3,:,:]).to(device).view(-1,1,image_size,image_size)
             ones = torch.count_nonzero(mask)
             zeros = mask.numel() - ones
@@ -115,9 +115,9 @@ def train(model, train_loader, val_loader, learning_rate, epochs, device, pos_we
             for batch in pbar:
                 # load image and mask into device memory
                 batch = np.nan_to_num(batch)
-                image_19 = torch.from_numpy(batch[:, 0:2, :, :])
-                image_20 = torch.from_numpy(batch[:, 4:6, :, :])
-                image = torch.cat((image_19, image_20), 1).to(device)
+                image = torch.from_numpy(batch[:, 0:2, :, :])
+                #image_20 = torch.from_numpy(batch[:, 4:6, :, :])
+                #image = torch.cat((image_19, image_20), 1).to(device)
                 mask = torch.from_numpy(batch[:, 3, :, :]).to(device).view(-1, 1, image_size, image_size)
 
                 # pass images into model
@@ -144,9 +144,9 @@ def visualize_predictions(dataloader, model):
             # load image and mask into device memory
             batch = np.nan_to_num(batch)
             rgb_image = torch.from_numpy(batch[:, 0:3, :, :]).to(device)
-            image_19 = torch.from_numpy(batch[:, 0:2, :, :])
-            image_20 = torch.from_numpy(batch[:, 4:6, :, :])
-            image = torch.cat((image_19, image_20), 1).to(device)
+            image = torch.from_numpy(batch[:, 0:2, :, :])
+            #image_20 = torch.from_numpy(batch[:, 4:6, :, :])
+            #image = torch.cat((image_19, image_20), 1).to(device)
 
             mask = torch.from_numpy(batch[:, 3, :, :]).to(device).view(-1, 1, image_size, image_size)
 
@@ -188,8 +188,14 @@ def save_model(model, path):
     torch.save(model, path)
 
 
+def load_model(path):
+    model = torch.load(path)
+    return model
+
+
 if __name__ == '__main__':
-    data_dir = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/ai4good/data/overlayed_tif'
+    data_dir = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/ai4good/data/test'
+
     epochs = 10
     image_size = 256
     batch_size = 8
@@ -204,6 +210,8 @@ if __name__ == '__main__':
     modelname = 'unet_res34'
 
     train_loader, val_loader = get_dataloader(data_dir, image_size, batch_size)
+    visualize_dataset(train_loader)
+
     trained_model,mIoU = train(model, train_loader, val_loader, learning_rate, epochs, device)
 
     save_path = f'models/{modelname}_{epochs}_{mIoU}.pt'
