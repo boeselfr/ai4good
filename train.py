@@ -194,7 +194,8 @@ def load_model(path):
 
 
 if __name__ == '__main__':
-    data_dir = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/ai4good/data/test'
+    data_dir = '/cluster/home/fboesel/ai4good/data/tif_folder'
+   #data_dir = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/ai4good/data/tif_folder'
 
     epochs = 10
     image_size = 256
@@ -204,7 +205,7 @@ if __name__ == '__main__':
     model = smp.Unet(
         encoder_name="resnet34",
         encoder_weights="imagenet",
-        in_channels=4,
+        in_channels=2,
         classes=1
     )
     modelname = 'unet_res34'
