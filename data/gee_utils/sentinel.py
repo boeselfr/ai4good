@@ -1,10 +1,14 @@
+from typing import List, Union
+
 import ee
 
-def sample_s1_grd_images(
-    aoi: ee.Geometry.Polygon,
+
+def build_sentinel_1_image_collection(
+    aoi: Union[ee.FeatureCollection, ee.Geometry.Polygon],
     start_date: ee.Date,
     end_date: ee.Date,
     instrument_mode: str = 'IW',
+    bands: List[str] = ['VV', 'VH'],
     platform_number: str = None,
     orbit_pass: str = None,
 ):
@@ -16,6 +20,11 @@ def sample_s1_grd_images(
     assert instrument_mode in ["IW"]
     coll = coll.filter(ee.Filter.eq("instrumentMode", instrument_mode))
 
+    for band in bands:
+        assert band in ['VV', 'VH', 'HH', 'HV']
+        coll = coll.filter(
+            ee.Filter.listContains('transmitterReceiverPolarisation', band))
+
     # Optionally filter by metadata
     if platform_number is not None:
         assert platform_number in ['A', 'B'], "Platform number must be A or B"
@@ -25,11 +34,13 @@ def sample_s1_grd_images(
                               ], "Orbit pass must ASCENDING or DESCENDING"
         coll = coll.filter(ee.Filter.eq("orbitProperties_pass", orbit_pass))
 
-    # Filter by bounds and return
-    return coll.filterBounds(aoi)
+    # Filter by bounds
+    coll = coll.filterBounds(aoi)
+
+    return coll
 
 
-def sample_s2_sr_images(
+def build_sentinel_2_image_collection(
     aoi: ee.Geometry.Polygon,
     start_date: ee.Date,
     end_date: ee.Date,
