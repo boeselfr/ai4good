@@ -18,6 +18,7 @@ import datetime
 from utils.metrics import weighted_bce,IoU
 #from NesNet import *
 import wandb
+from torchmetrics.functional import accuracy
 
 
 
@@ -73,7 +74,7 @@ def visualize_dataset(dataloader):
             break
 
 
-def train(model, train_loader, val_loader, learning_rate, epochs, device,save_path, pos_weight=200):
+def train(model, train_loader, val_loader, learning_rate, epochs, device,save_path):
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -84,92 +85,112 @@ def train(model, train_loader, val_loader, learning_rate, epochs, device,save_pa
         # train set
         pbar = tqdm(train_loader)
         model.train()
+
         skipcount = 0
         train_iou = 0
+        hand_train_iou = 0
         train_loss = 0
         train_batch_ct = 0
+        acc_score = 0
+
         for batch in pbar:
             # load image and mask into device memory based on two images in one tif now
             batch = np.nan_to_num(batch)
+            # convert to 0,1 range
+            batch[:, 3, :, :] = np.round(batch[:,3,:,:] / 255.0)
+            # this depends on where the x and y channels are in the tif
             image = torch.from_numpy(batch[:,0:2,:,:]).to(device)
-            reference_mask = torch.from_numpy(batch[:,4,:,:]).to(device).view(-1, 1, image_size, image_size)
-            image = torch.cat((image,reference_mask), 1).to(device)
+            reference_image = torch.from_numpy(batch[:,-2:,:,:]).to(device).view(-1, 2, image_size, image_size)
+            image = torch.cat((image,reference_image), 1).to(device)
             mask = torch.from_numpy(batch[:,3,:,:]).to(device).view(-1,1,image_size,image_size)
             ones = torch.count_nonzero(mask)
             if ones == 0:
                 skipcount += 1
                 continue
-            """print(f'zeros: {zeros}')
-            print(f'ones: {ones}')
-            print(f'pos_weight: {weight}')"""
             train_batch_ct += 1
             # pass images into model
             pred = model(image)
 
-            #print(f'pred shape: {np.shape(pred)})
-            #print(f'mask shape: {np.shape(mask)}')
             # get loss
             #loss = weighted_bce(pred, mask, weight1=pos_weight, weight0=1)
-            tversky = smp.losses.TverskyLoss(mode='binary', smooth=0.1,alpha = 0.01,  beta = 0.99)
-            loss = tversky.compute_score(pred, mask)
+            tversky = smp.losses.TverskyLoss(mode='binary', smooth=0.1,alpha = 0.05,  beta = 0.95)
+            #loss = tversky.compute_score(pred, mask)
+            loss = weighted_bce(pred, mask)
+            handIoU = IoU(pred, mask)
+            loss = 1-handIoU
 
             # compute and display progress
             jaccard = smp.losses.JaccardLoss(mode='binary', smooth=0.1)
             mIoU = jaccard(y_pred=pred, y_true=mask)
-            loss = 1 - mIoU
+            acc = accuracy(pred, torch.tensor(mask, dtype= torch.int), average='micro')
             train_iou += mIoU
+            hand_train_iou += handIoU
             train_loss += loss
+            acc_score += acc
             # update the model
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-
-            pbar.set_description('Loss: {0:1.4f} | mIoU {1:1.4f}'.format(loss.item(), mIoU))
+            pbar.set_description(
+                f'Loss: {loss.item()} | mIoU {mIoU} | handIoU {handIoU} | acc {acc}')
 
         train_iou = train_iou / train_batch_ct
         train_loss = train_loss / train_batch_ct
+        hand_train_iou = hand_train_iou / train_batch_ct
+        acc_score = acc_score / train_batch_ct
         wandb.log({"loss":train_loss,
-                   "iou": train_iou})
-        print(f'bacthes skipped: {skipcount}')
-        print(f'mean train iou: {train_iou}')
-        print(f'mean train loss. {train_loss}')
+                   "iou": train_iou,
+                   "handiou": hand_train_iou,
+                   "acc": acc_score})
+
         #######validation######
         pbar = tqdm(val_loader)
         model.eval()
         mean_iou = 0
+        hand_mean_iou = 0
         batch_ct = 0
+        mean_acc = 0
         with torch.no_grad():
             for batch in pbar:
                 batch_ct += 1
                 # load image and mask into device memory
                 batch = np.nan_to_num(batch)
+                batch[:, 3, :, :] = np.round(batch[:, 3, :, :] / 255.0)
                 image = torch.from_numpy(batch[:, 0:2, :, :]).to(device)
-                reference_mask = torch.from_numpy(batch[:, 4, :, :]).to(device).view(-1, 1, image_size, image_size)
-                image = torch.cat((image, reference_mask), 1).to(device)
+                reference_image = torch.from_numpy(batch[:, -2:, :, :]).to(device).view(-1, 2, image_size, image_size)
+                image = torch.cat((image, reference_image), 1).to(device)
                 mask = torch.from_numpy(batch[:, 3, :, :]).to(device).view(-1, 1, image_size, image_size)
 
                 # pass images into model
                 pred = model(image)
 
-                # get loss
-                #loss = weighted_bce(pred, mask, weight1=pos_weight, weight0=1)
-                tversky = smp.losses.TverskyLoss(mode='binary', alpha=0.01, beta=0.99)
-                loss = tversky.compute_score(pred, mask)
-
                 # compute and display progress
                 #mIoU = iou_logger(pred,torch.tensor(mask, dtype=torch.int32, device=device))
                 jaccard = smp.losses.JaccardLoss(mode='binary', smooth=0.1)
                 mIoU = jaccard(y_pred=pred, y_true=mask)
+                handIoU = IoU(pred, mask)
+
+                acc = accuracy(pred, torch.tensor(mask, dtype= torch.int), average='micro')
                 mean_iou += mIoU
-                pbar.set_description('Val Loss: {0:1.4f} | mIoU {1:1.4f}'.format(loss.item(), mIoU))
+                hand_mean_iou += handIoU
+                mean_acc += acc
+
+                pbar.set_description(
+                    f' mIoU {mIoU} | handIoU {handIoU} | acc {acc}')
 
         mean_iou = mean_iou/ batch_ct
-        wandb.log({'val_iou':mean_iou})
-        print(f'mean val iou: {mean_iou}')
-        #save after each epoch:
+        hand_mean_iou = hand_mean_iou / batch_ct
+        mean_acc = mean_acc / batch_ct
+        wandb.log({'val_iou':mean_iou,
+                   'val_hand_iou': hand_mean_iou,
+                   "val_acc": mean_acc})
+
+        #save after each k epochs:
+
         if epoch%5 == 0:
             torch.save(model, save_path)
+
     return model, mean_iou
 
 
@@ -305,29 +326,30 @@ def load_model(path):
     return model
 
 if __name__ == '__main__':
-    model_path = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/ai4good/models/model.pt'
-    #wandb.init(project="ai4good", entity="fboesel")
-    #data_dir = '/cluster/scratch/fboesel/data/ai4good/ard_gee'
-    data_dir = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/data/ard_gee'
-    epochs = 10
+    #model_path = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/ai4good/models/model.pt'
+    wandb.init(project="ai4good", entity="fboesel")
+    data_dir = '/cluster/scratch/fboesel/data/ai4good/Change_Detection_ARD'
+    #data_dir = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/data/Change_Detection_ARD'
+    epochs = 100
     image_size = 256
     batch_size = 8
-    device = 'cpu'
+    device = 'cuda'
     learning_rate = 1e-3
     model = smp.Unet(
         encoder_name="resnet34",
-        in_channels=3,
+        in_channels=4,
         activation='sigmoid',
         classes=1
     )
     modelname = 'resnet34'
 
-    """wandb.config = {
+    wandb.config = {
         "learning_rate": learning_rate,
         "epochs": epochs,
         "batch_size": batch_size,
-        "modelname": modelname
-    }"""
+        "modelname": modelname,
+        "data_dir": data_dir
+    }
 
     """input_shape = [256, 256, 3]
     model = NesNet.Nest_Net2(input_shape, deep_supervision=True)
@@ -341,10 +363,10 @@ if __name__ == '__main__':
     time = datetime.datetime.now()
     save_path = f'models/{modelname}_{epochs}_{time}.pt'
 
-    #trained_model,mIoU = train(model, train_loader, val_loader, learning_rate, epochs, device, save_path=save_path)
+    trained_model,mIoU = train(model, train_loader, val_loader, learning_rate, epochs, device, save_path=save_path)
     #trained_model = train_nesnet(model, train_loader, val_loader, epochs)
-    model = torch.load(model_path,  map_location=torch.device('cpu'))
-    visualize_predictions(train_loader, model)
-    visualize_predictions(val_loader, model)
+    #model = torch.load(model_path,  map_location=torch.device('cpu'))
+    #visualize_predictions(train_loader, model)
+    #visualize_predictions(val_loader, model)
     #trained_model.save(save_path)
     #save_model(trained_model, save_path)
