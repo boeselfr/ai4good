@@ -13,12 +13,13 @@ import segmentation_models_pytorch as smp
 from torch import nn
 from tqdm import tqdm
 import datetime
-
+import math
 #import NesNet
 from utils.metrics import weighted_bce,IoU
 #from NesNet import *
 import wandb
 from torchmetrics.functional import accuracy
+from sklearn.metrics import f1_score, roc_auc_score
 
 
 
@@ -74,10 +75,11 @@ def visualize_dataset(dataloader):
             break
 
 
-def train(model, train_loader, val_loader, learning_rate, epochs, device,save_path):
+def train(model, train_loader, val_loader, learning_rate, epochs, device,save_path, criterion):
     model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+    best_mIoU = 0
     ######training#######
     for epoch in range(epochs):
         print('Epoch: [{}/{}]'.format(epoch + 1, epochs))
@@ -92,6 +94,7 @@ def train(model, train_loader, val_loader, learning_rate, epochs, device,save_pa
         train_loss = 0
         train_batch_ct = 0
         acc_score = 0
+        train_f1 = 0
 
         for batch in pbar:
             # load image and mask into device memory based on two images in one tif now
@@ -103,6 +106,9 @@ def train(model, train_loader, val_loader, learning_rate, epochs, device,save_pa
             reference_image = torch.from_numpy(batch[:,-2:,:,:]).to(device).view(-1, 2, image_size, image_size)
             image = torch.cat((image,reference_image), 1).to(device)
             mask = torch.from_numpy(batch[:,3,:,:]).to(device).view(-1,1,image_size,image_size)
+            #inverse_mask = 1.0-mask
+            #mask = torch.cat((mask, inverse_mask), 1).to(device)
+            # dont consider empty batches
             ones = torch.count_nonzero(mask)
             if ones == 0:
                 skipcount += 1
@@ -110,47 +116,64 @@ def train(model, train_loader, val_loader, learning_rate, epochs, device,save_pa
             train_batch_ct += 1
             # pass images into model
             pred = model(image)
-
+            jaccard = smp.losses.JaccardLoss(mode='binary', smooth=0.1)
+            mIoU = 1-jaccard(pred, mask)
+            handIoU = IoU(pred, mask)
             # get loss
             #loss = weighted_bce(pred, mask, weight1=pos_weight, weight0=1)
-            tversky = smp.losses.TverskyLoss(mode='binary', smooth=0.1,alpha = 0.05,  beta = 0.95)
-            #loss = tversky.compute_score(pred, mask)
-            loss = weighted_bce(pred, mask)
-            handIoU = IoU(pred, mask)
-            loss = 1-handIoU
+            if criterion == 'logloss_iou':
+                loss = -torch.log(handIoU)
+            elif criterion == 'linear_iou':
+                loss = 1 - handIoU
+            elif criterion == 'weighted_bce':
+                loss = weighted_bce(pred, mask)
+            elif criterion =='tversky':
+                tversky = smp.losses.TverskyLoss(mode='binary', smooth=0.1, alpha=0.05, beta=0.95)
+                loss = tversky(pred, mask)
+            else:
+                print('loss not defined!')
+                return model, 0
 
-            # compute and display progress
-            jaccard = smp.losses.JaccardLoss(mode='binary', smooth=0.1)
-            mIoU = jaccard(y_pred=pred, y_true=mask)
             acc = accuracy(pred, torch.tensor(mask, dtype= torch.int), average='micro')
+            # threshold preds for f1_score:
+            #thresh = torch.Tensor([0.5], device=device)
+            #thresholded_pred = (pred > thresh).float() * 1
+            #f1 = f1_score(mask, thresholded_pred)
+            dice = smp.losses.DiceLoss(mode='binary', smooth=0.1) # this is 1- dice coeff
+            f1 = 1 - dice(pred, mask)
             train_iou += mIoU
             hand_train_iou += handIoU
             train_loss += loss
             acc_score += acc
+            train_f1 += f1
             # update the model
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             pbar.set_description(
-                f'Loss: {loss.item()} | mIoU {mIoU} | handIoU {handIoU} | acc {acc}')
+                f'Loss: {loss.item()} | mIoU {mIoU} | handIoU {handIoU} | acc {acc} | f1 {f1}')
 
         train_iou = train_iou / train_batch_ct
         train_loss = train_loss / train_batch_ct
         hand_train_iou = hand_train_iou / train_batch_ct
         acc_score = acc_score / train_batch_ct
+        train_f1 = train_f1 / train_batch_ct
         wandb.log({"loss":train_loss,
                    "iou": train_iou,
                    "handiou": hand_train_iou,
-                   "acc": acc_score})
+                   "acc": acc_score,
+                   "f1":train_f1})
 
         #######validation######
         pbar = tqdm(val_loader)
         model.eval()
-        mean_iou = 0
-        hand_mean_iou = 0
+        val_iou = 0
+        hand_val_iou = 0
         batch_ct = 0
-        mean_acc = 0
+        val_acc = 0
+        val_f1 = 0
+
         with torch.no_grad():
             for batch in pbar:
                 batch_ct += 1
@@ -168,30 +191,35 @@ def train(model, train_loader, val_loader, learning_rate, epochs, device,save_pa
                 # compute and display progress
                 #mIoU = iou_logger(pred,torch.tensor(mask, dtype=torch.int32, device=device))
                 jaccard = smp.losses.JaccardLoss(mode='binary', smooth=0.1)
-                mIoU = jaccard(y_pred=pred, y_true=mask)
+                mIoU = 1 - jaccard(y_pred=pred, y_true=mask)
                 handIoU = IoU(pred, mask)
 
-                acc = accuracy(pred, torch.tensor(mask, dtype= torch.int), average='micro')
-                mean_iou += mIoU
-                hand_mean_iou += handIoU
-                mean_acc += acc
+                acc = accuracy(pred, torch.tensor(mask, dtype=torch.int), average='micro')
+                dice = smp.losses.DiceLoss(mode='binary')  # this is 1- dice coeff
+                f1 = 1 - dice(pred, mask)
+                val_iou += mIoU
+                hand_val_iou += handIoU
+                val_acc += acc
+                val_f1 += f1
 
                 pbar.set_description(
-                    f' mIoU {mIoU} | handIoU {handIoU} | acc {acc}')
+                    f' mIoU {mIoU} | handIoU {handIoU} | acc {acc} | f1 {f1}')
 
-        mean_iou = mean_iou/ batch_ct
-        hand_mean_iou = hand_mean_iou / batch_ct
-        mean_acc = mean_acc / batch_ct
-        wandb.log({'val_iou':mean_iou,
-                   'val_hand_iou': hand_mean_iou,
-                   "val_acc": mean_acc})
+        val_iou = val_iou/ batch_ct
+        hand_val_iou = torch.tensor([hand_val_iou / batch_ct], device=device)
+        val_acc = val_acc / batch_ct
+        wandb.log({'val_iou':val_iou,
+                   'val_hand_iou': hand_val_iou,
+                   "val_acc": val_acc,
+                   "val_f1": val_f1})
 
         #save after each k epochs:
+        curr_save_path = save_path + '_' + str(hand_val_iou.item()) + '.pt'
+        if epoch%5 == 0 and hand_val_iou.item() > best_mIoU:
+            torch.save(model, curr_save_path)
+            best_mIoU = hand_val_iou.item()
 
-        if epoch%5 == 0:
-            torch.save(model, save_path)
-
-    return model, mean_iou
+    return model, hand_val_iou.item()
 
 
 def train_nesnet(model, train_loader, val_loader, epochs):
@@ -327,14 +355,15 @@ def load_model(path):
 
 if __name__ == '__main__':
     #model_path = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/ai4good/models/model.pt'
-    wandb.init(project="ai4good", entity="fboesel")
     data_dir = '/cluster/scratch/fboesel/data/ai4good/Change_Detection_ARD'
     #data_dir = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/data/Change_Detection_ARD'
-    epochs = 100
+    epochs = 1000
     image_size = 256
-    batch_size = 8
+    batch_size = 16
     device = 'cuda'
-    learning_rate = 1e-3
+    learning_rate = 1e-2
+    # weighted_bce , linear_iou , logloss_iou
+    criterion = 'logloss_iou'
     model = smp.Unet(
         encoder_name="resnet34",
         in_channels=4,
@@ -343,13 +372,16 @@ if __name__ == '__main__':
     )
     modelname = 'resnet34'
 
-    wandb.config = {
+    config = {
         "learning_rate": learning_rate,
         "epochs": epochs,
         "batch_size": batch_size,
         "modelname": modelname,
-        "data_dir": data_dir
+        "data_dir": data_dir,
+        "criterion": criterion
     }
+    wandb.init(project="ai4good", entity="fboesel", config=config)
+
 
     """input_shape = [256, 256, 3]
     model = NesNet.Nest_Net2(input_shape, deep_supervision=True)
@@ -360,10 +392,10 @@ if __name__ == '__main__':
 
     train_loader, val_loader = get_dataloader(data_dir, image_size, batch_size)
     #visualize_dataset(train_loader)
-    time = datetime.datetime.now()
-    save_path = f'models/{modelname}_{epochs}_{time}.pt'
+    time = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+    save_path = f'models/{modelname}_{epochs}_{time}'
 
-    trained_model,mIoU = train(model, train_loader, val_loader, learning_rate, epochs, device, save_path=save_path)
+    trained_model,mIoU = train(model, train_loader, val_loader, learning_rate, epochs, device, save_path=save_path, criterion=criterion)
     #trained_model = train_nesnet(model, train_loader, val_loader, epochs)
     #model = torch.load(model_path,  map_location=torch.device('cpu'))
     #visualize_predictions(train_loader, model)
