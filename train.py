@@ -4,9 +4,6 @@ import os
 
 #import tensorflow.keras
 import torch
-from torchvision import transforms
-from geotiff_crop_dataset import CropDatasetReader
-from torch.utils.data import DataLoader, random_split
 import numpy as np
 import matplotlib.pyplot as plt
 import segmentation_models_pytorch as smp
@@ -20,59 +17,76 @@ from utils.metrics import weighted_bce,IoU
 import wandb
 from torchmetrics.functional import accuracy
 from sklearn.metrics import f1_score, roc_auc_score
+from utils.data_utils import *
 
 
+def new_train(model, train_loader, val_loader, learning_rate, epochs, device, save_path, criterion):
 
-def get_dataloader(data_dir, image_size, batch_size):
-    dataset_list = []
+    if criterion == ['iou', 'jaccard']:
+        loss = smp.utils.losses.JaccardLoss()
+    elif criterion == 'weighted_bce':
+        loss = smp.losses.TverskyLoss(mode='binary', smooth=0.1, alpha=0.05, beta=0.95)
+    elif criterion in ['dice', 'f1']:
+        loss = smp.utils.losses.DiceLoss()
+    else:
+        print('loss not defined!')
+        return model, 0
 
-    for i, image in enumerate(os.listdir(data_dir)):
-        print(image)
-        if 'tif' in image:
-            dataset_list.append(CropDatasetReader(
-                os.path.join(data_dir, image),
-                crop_size=image_size,  # Edge size of each cropped square section
-                stride=image_size,  # Number of pixels between each cropped sub-image
-                padding=0,  # Number of pixels appended to sides of cropped images
-                fill_value=0,  # The value to use for nodata sections and padded regions
-                transform=transforms.ToTensor()  # torchvision transform functions
-            ))
+    metrics = [
+        smp.utils.metrics.IoU(threshold=0.5),
+        smp.utils.metrics.Fscore(threshold=0.5)
+    ]
 
-    # concatenate datasets to one big one:
-    ds = torch.utils.data.ConcatDataset(dataset_list)
-    # now we can dataload it:
-    train_size = int(0.8 * len(ds))
-    val_size = len(ds) - train_size
+    optimizer = torch.optim.Adam([
+        dict(params=model.parameters(), lr=learning_rate)
+    ])
 
-    print(f' trainsize: {train_size}')
-    print(f' valsize: {val_size}')
+    # create epoch runners
+    # it is a simple loop of iterating over dataloader`s samples
+    train_epoch = smp.utils.train.TrainEpoch(
+        model,
+        loss=loss,
+        metrics=metrics,
+        optimizer=optimizer,
+        device=device,
+        verbose=True,
+    )
 
-    train_dataset, val_dataset = random_split(ds, [train_size, val_size])
+    valid_epoch = smp.utils.train.ValidEpoch(
+        model,
+        loss=loss,
+        metrics=metrics,
+        device=device,
+        verbose=True,
+    )
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=0, pin_memory=False)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=0, pin_memory=False)
+    max_score = 0
 
-    return train_loader, val_loader
+    for i in range(0, epochs):
 
+        print('\nEpoch: {}'.format(i))
+        train_logs = train_epoch.run(train_loader)
+        valid_logs = valid_epoch.run(val_loader)
 
-def visualize_dataset(dataloader):
-    for i, x in enumerate(dataloader):
-            print(np.shape(x))
-            x = np.nan_to_num(x)
-            image = x[:,0:3,:,:]
-            mask = x[:,3,:,:]
-            image[:,2,:,:] = image[:,0,:,:]/image[:,1,:,:]
-            print(f'im shape: {np.shape(image)}')
-            print(f'mask shape: {np.shape(mask)}')
-            # do the rgb rendering in here:
-            print(np.shape(image[0]))
-            im = np.moveaxis(image[0], 0, -1)
-            print(np.shape(im))
-            fig,ax = plt.subplots(1,2)
-            ax[0].imshow(im) # vmin=[-20,-20,0], vmax=[0,0,2])
-            ax[1].imshow(mask[0])
-            plt.show()
-            break
+        wandb.log({'val_iou': valid_logs['iou_score'],
+                   "val_f1": valid_logs['fscore'],
+                   "val_loss": valid_logs['dice_loss'],
+                   "train_iou": train_logs['iou_score'],
+                   "train_f1": train_logs['fscore'],
+                   "train_loss": train_logs['dice_loss']
+                   })
+
+        # do something (save model, change lr, etc.)
+        if max_score < valid_logs['iou_score']:
+            max_score = valid_logs['iou_score']
+            torch.save(model, save_path + '_best_model.pth')
+            print('Model saved!')
+
+        if i == int(round(epochs/2)):
+            optimizer.param_groups[0]['lr'] = learning_rate * 0.5
+            print('Decrease decoder learning rate to 1e-5!')
+
+    return model, max_score
 
 
 def train(model, train_loader, val_loader, learning_rate, epochs, device,save_path, criterion):
@@ -98,16 +112,7 @@ def train(model, train_loader, val_loader, learning_rate, epochs, device,save_pa
 
         for batch in pbar:
             # load image and mask into device memory based on two images in one tif now
-            batch = np.nan_to_num(batch)
-            # convert to 0,1 range
-            batch[:, 3, :, :] = np.round(batch[:,3,:,:] / 255.0)
-            # this depends on where the x and y channels are in the tif
-            image = torch.from_numpy(batch[:,0:2,:,:]).to(device)
-            reference_image = torch.from_numpy(batch[:,-2:,:,:]).to(device).view(-1, 2, image_size, image_size)
-            image = torch.cat((image,reference_image), 1).to(device)
-            mask = torch.from_numpy(batch[:,3,:,:]).to(device).view(-1,1,image_size,image_size)
-            #inverse_mask = 1.0-mask
-            #mask = torch.cat((mask, inverse_mask), 1).to(device)
+            x,y = handle_batch_prodes(batch, device, image_size)
             # dont consider empty batches
             ones = torch.count_nonzero(mask)
             if ones == 0:
@@ -271,134 +276,43 @@ def train_nesnet(model, train_loader, val_loader, epochs):
     return model
 
 
-def visualize_predictions(dataloader, model):
-    # eval visually aswell:
-    final_predictions, input_images, masks = [], [], []
-
-    model.eval()
-    with torch.no_grad():
-        for batch in tqdm(dataloader):
-            # load image and mask into device memory
-            batch = np.nan_to_num(batch)
-            rgb_image = torch.from_numpy(batch[:, 0:3, :, :]).to(device)
-            image = torch.from_numpy(batch[:, 0:2, :, :])
-            reference_mask = torch.from_numpy(batch[:, 4, :, :]).to(device).view(-1, 1, image_size, image_size)
-            image = torch.cat((image, reference_mask), 1).to(device)
-
-            mask = torch.from_numpy(batch[:, 3, :, :]).to(device).view(-1, 1, image_size, image_size)
-
-            # pass images into model
-            pred = model(image)
-
-            # compute class predictions, i.e. flood or no-flood
-            class_pred = torch.round(pred)
-
-            # convert class prediction to numpy
-            class_pred = class_pred.detach().cpu().numpy()
-
-            # add to final predictions
-            final_predictions.append(class_pred)
-
-            # collect input to model
-            #input_images.append(rgb_image.detach().cpu().numpy())
-            #masks.append(mask.detach().cpu().numpy())
-            rgb_im = rgb_image.detach().cpu().numpy()
-            msk = mask.detach().cpu().numpy()
-
-            if np.count_nonzero(class_pred) > 0:
-                rgb_im[:, 2, :, :] = 1 - (rgb_im[:, 0, :, :] / rgb_im[:, 1, :, :])
-                # getting correct format for plotly -> moveaxis
-                rgb_im = np.moveaxis(rgb_im, 1, -1)
-
-                msk = np.concatenate(msk, axis=0)
-                msk = np.moveaxis(msk, 1, -1)
-                class_pred = np.moveaxis(class_pred, 1, -1)
-                for i in range(len(rgb_im)):
-                    fig, ax = plt.subplots(1, 3)
-                    ax[0].imshow(rgb_im[i])  # vmin=[-20,-20,0], vmax=[0,0,2])
-                    ax[1].imshow(msk[i])
-                    ax[2].imshow(class_pred[i])
-                    plt.show()
-
-
-
-
-
-    """final_predictions = np.concatenate(final_predictions, axis=0)
-    input_images = np.concatenate(input_images, axis=0)
-    # adjusting sar to rgb
-    input_images[:, 2, :, :] = 1 - (input_images[:, 0, :, :] / input_images[:, 1, :, :])
-    # getting correct format for plotly -> moveaxis
-    input_images = np.moveaxis(input_images, 1, -1)
-
-    masks = np.concatenate(masks, axis=0)
-    masks = np.moveaxis(masks, 1, -1)
-
-    for i, pred in enumerate(final_predictions):
-        if i > 10:
-            break
-        fig, ax = plt.subplots(1, 3)
-        ax[0].imshow(input_images[i])  # vmin=[-20,-20,0], vmax=[0,0,2])
-        ax[1].imshow(masks[i])
-        ax[2].imshow(pred)
-        plt.show()"""
-
-
-
-def save_model(model, path):
-    torch.save(model, path)
-
-
-def load_model(path):
-    model = torch.load(path)
-    return model
-
 if __name__ == '__main__':
-    #model_path = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/ai4good/models/model.pt'
-    data_dir = '/cluster/scratch/fboesel/data/ai4good/Change_Detection_ARD'
-    #data_dir = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/data/Change_Detection_ARD'
+    time = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+
     epochs = 1000
     image_size = 256
     batch_size = 16
     device = 'cuda'
-    learning_rate = 1e-2
-    # weighted_bce , linear_iou , logloss_iou
-    criterion = 'logloss_iou'
+    learning_rate = 0.0001
+    activation = 'sigmoid'
+    encoder = 'resnet34'
+    # weighted_bce , iou
+    criterion = 'dice'
+
+    base_path = '/cluster/scratch/fboesel/data/ai4good'
+    # base_path = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/data'
+    data_dir = os.path.join(base_path, 'tf_records')
+    save_path = os.path.join(base_path, f'models/{encoder}_{epochs}_{time}')
+
     model = smp.Unet(
-        encoder_name="resnet34",
+        encoder_name=encoder,
         in_channels=4,
-        activation='sigmoid',
+        activation=activation,
         classes=1
     )
-    modelname = 'resnet34'
 
     config = {
         "learning_rate": learning_rate,
         "epochs": epochs,
         "batch_size": batch_size,
-        "modelname": modelname,
+        "encoder": encoder,
         "data_dir": data_dir,
-        "criterion": criterion
+        "criterion": criterion,
+        "activation": activation
     }
     wandb.init(project="ai4good", entity="fboesel", config=config)
 
+    train_loader, val_loader = get_dataloader_tfrecords(data_dir, batch_size)
 
-    """input_shape = [256, 256, 3]
-    model = NesNet.Nest_Net2(input_shape, deep_supervision=True)
-    output_layer = model.get_layer('output_5')
-    print("the output shape is:")
-    print(output_layer.output_shape)"""
+    trained_model, mIoU = new_train(model, train_loader, val_loader, learning_rate, epochs, device, save_path=save_path, criterion=criterion)
 
-
-    train_loader, val_loader = get_dataloader(data_dir, image_size, batch_size)
-    #visualize_dataset(train_loader)
-    time = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
-    save_path = f'models/{modelname}_{epochs}_{time}'
-
-    trained_model,mIoU = train(model, train_loader, val_loader, learning_rate, epochs, device, save_path=save_path, criterion=criterion)
-    #trained_model = train_nesnet(model, train_loader, val_loader, epochs)
-    #model = torch.load(model_path,  map_location=torch.device('cpu'))
-    #visualize_predictions(train_loader, model)
-    #visualize_predictions(val_loader, model)
-    #trained_model.save(save_path)
-    #save_model(trained_model, save_path)
