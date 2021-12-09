@@ -5,9 +5,10 @@ from dataset_reader import CropDatasetReader
 from torch.utils.data import DataLoader, random_split
 from torchvision import transforms
 import os
-import tensorflow as tf
-import tensorflow_datasets as tfds
+#import tensorflow as tf
+#import tensorflow_datasets as tfds
 from tfrecord.torch.dataset import TFRecordDataset, MultiTFRecordDataset
+from tqdm import tqdm
 
 
 def visualize_dataset(dataloader):
@@ -42,7 +43,9 @@ def get_dataloader(data_dir, image_size, batch_size):
                 stride=image_size,  # Number of pixels between each cropped sub-image
                 padding=0,  # Number of pixels appended to sides of cropped images
                 fill_value=0,  # The value to use for nodata sections and padded regions
-                transform=transforms.ToTensor()  # torchvision transform functions
+                transform=transforms.ToTensor(),#,  # torchvision transform functions
+                preprocessing=preprocessing#,
+                #augmentation=augmentation
             ))
 
     # concatenate datasets to one big one:
@@ -73,6 +76,19 @@ def get_dataloader(data_dir, image_size, batch_size):
 def get_dataloader_tfrecords(data_dir, batch_size):
     train_loader = None
     val_loader = None
+    file_pattern = (
+        "*.tfrecord"
+    )
+    dataset = get_dataset_torch(data_dir, file_pattern)
+
+    """train_size = int(0.8 * len(dataset))
+    val_size = len(dataset) - train_size
+
+    print(f' trainsize: {train_size}')
+    print(f' valsize: {val_size}')
+    train_dataset, val_dataset = random_split(dataset, [train_size, val_size])"""
+    train_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size)
+    #val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=batch_size)
     return train_loader, val_loader
 
 
@@ -91,20 +107,24 @@ def visualize(**images):
 
 
 def visualize_predictions(dataloader, model):
+    device = 'cpu'
+    image_size = 256
     # eval visually aswell:
     final_predictions, input_images, masks = [], [], []
 
     model.eval()
     with torch.no_grad():
-        for batch in tqdm(dataloader):
+        for batch,mask in tqdm(dataloader):
             # load image and mask into device memory
+            batch = batch[0].cpu().detach().numpy()
             batch = np.nan_to_num(batch)
-            rgb_image = torch.from_numpy(batch[:, 0:3, :, :]).to(device)
-            image = torch.from_numpy(batch[:, 0:2, :, :])
-            reference_mask = torch.from_numpy(batch[:, 4, :, :]).to(device).view(-1, 1, image_size, image_size)
-            image = torch.cat((image, reference_mask), 1).to(device)
+            print(np.shape(batch))
+            rgb_image = torch.from_numpy(batch[ 0:3, :, :]).to(device)
+            image = torch.from_numpy(batch[ :, :, :]).view(1,-1, image_size, image_size)
+            #reference_mask = torch.from_numpy(mask).to(device).view(-1, 1, image_size, image_size)
+            #image = torch.cat((image), 1).to(device)
 
-            mask = torch.from_numpy(batch[:, 3, :, :]).to(device).view(-1, 1, image_size, image_size)
+            mask = mask.to(device).view(-1, 1, image_size, image_size)
 
             # pass images into model
             pred = model(image)
@@ -123,21 +143,22 @@ def visualize_predictions(dataloader, model):
             #masks.append(mask.detach().cpu().numpy())
             rgb_im = rgb_image.detach().cpu().numpy()
             msk = mask.detach().cpu().numpy()
-
+            print(np.count_nonzero(class_pred))
             if np.count_nonzero(class_pred) > 0:
-                rgb_im[:, 2, :, :] = 1 - (rgb_im[:, 0, :, :] / rgb_im[:, 1, :, :])
+                rgb_im[ 2, :, :] = (rgb_im[ 0, :, :] / rgb_im[ 1, :, :])
                 # getting correct format for plotly -> moveaxis
                 rgb_im = np.moveaxis(rgb_im, 1, -1)
 
                 msk = np.concatenate(msk, axis=0)
                 msk = np.moveaxis(msk, 1, -1)
                 class_pred = np.moveaxis(class_pred, 1, -1)
-                for i in range(len(rgb_im)):
+                for i in range(1):
                     fig, ax = plt.subplots(1, 3)
                     ax[0].imshow(rgb_im[i])  # vmin=[-20,-20,0], vmax=[0,0,2])
                     ax[1].imshow(msk[i])
                     ax[2].imshow(class_pred[i])
                     plt.show()
+                    #plt.savefig(os.path.join(base_path, 'fig_' + str(i) + '.png'))
 
 
 
@@ -162,6 +183,7 @@ def visualize_predictions(dataloader, model):
         ax[2].imshow(pred)
         plt.show()"""
 
+
 _SAR_BANDS = ["VV_before", "VH_before", "VV_after", "VH_after"]
 _MULTISPECTRAL_OPTICAL_BANDS = ["B4", "B3", "B2"]
 _RESPONSES = ["deforestation_mask"]
@@ -178,6 +200,8 @@ def parse_tfrecord(example_proto):
     Returns:
       A dictionary of tensors, keyed by feature name.
     """
+
+
     kernel_shape = [_KERNEL_SIZE, _KERNEL_SIZE]
     columns = [
         tf.io.FixedLenFeature(shape=kernel_shape, dtype=tf.float32) for k in _FEATURES
@@ -204,11 +228,27 @@ def to_tuple(inputs):
     return stacked[:len(_BANDS), :, :], stacked[len(_BANDS):, :, :]
 
 
-def get_dataset_tf(tf_record_dir):
-    records = [os.path.join(tf_record_dir, file) for file in os.listdir(tf_record_dir)]
-    dataset = tf.data.TFRecordDataset(records)
-    #dataset = dataset.map(parse_tfrecord, num_parallel_calls=5)
-    #dataset = dataset.map(to_tuple, num_parallel_calls=5)
+def get_dataset_tf(record_path,file_pattern):
+    #records = [os.path.join(tf_record_dir, file) for file in os.listdir(tf_record_dir)]
+    glob = tf.io.gfile.glob(record_path + file_pattern)
+    dataset = tf.data.TFRecordDataset(glob)
+    dataset = dataset.map(parse_tfrecord, num_parallel_calls=1)
+    dataset = dataset.map(to_tuple, num_parallel_calls=1)
+    return dataset
+
+
+def get_dataset_torch(record_path,file_pattern):
+    glob = tf.io.gfile.glob(record_path + file_pattern)
+    description = {"VV_before": "float", "VH_before": "float", "VV_after": "float", "VH_after":"float", "B4": "float",
+                   "B3": "float", "B2": "float", "deforestation_mask": "float"}
+    index_path = None
+    def drop_multispectral(features):
+        features.pop('B2')
+        features.pop('B3')
+        features.pop('B4')
+        return features
+
+    dataset = TFRecordDataset(glob, description=description, index_path = index_path,  transform=drop_multispectral)
     return dataset
 
 
@@ -235,14 +275,77 @@ def get_dataset(tf_record_dir) :
     return dataset
 
 
+def preprocessing(image,mask):
+    min = torch.min(torch.flatten(image))
+    max = torch.max(torch.flatten(image))
+    image = torch.tensor(torch.exp(image), dtype=torch.float)
+    mean = torch.mean(torch.flatten(image))
+    std = torch.std(torch.flatten(image))
+    sample = dict()
+    sample['image'] = (image - mean) / (0.1 + std)
+    sample['mask'] = mask
+    return sample
+
+def augmentation(image, mask):
+    mean = torch.mean(torch.flatten(image))
+    std = torch.std(torch.flatten(image))
+    #print(np.shape(image))
+    gaussian = np.random.normal(mean, std, (np.shape(image)[0], np.shape(image)[1], np.shape(image)[2]))
+    image = torch.tensor(image + gaussian, dtype=torch.float)
+    #flip, rotate:
+    p = np.random.random(1)[0]
+    if p > 0.5:
+        image = torch.fliplr(image)
+        mask = torch.fliplr(mask)
+
+    sample = dict()
+    sample['image'] = image
+    sample['mask'] = mask
+    return sample
+
 
 if __name__ == '__main__':
-    record_path = '/cluster/scratch/fboesel/data/ai4good/test'
-    dataset = get_dataset_tf(record_path)
+    """record_path = '/cluster/scratch/fboesel/data/ai4good/tf_records/'
+    file_pattern = (
+        "*.tfrecord"
+    )
+    train_loader, val_loader = get_dataloader_tfrecords(record_path, batch_size=8)
+    print(train_loader)
+    for image in train_loader:
+        print(np.shape(image))
+        #print(np.shape(mask))
+    
+    dataset = get_dataset_tf(record_path, file_pattern)
     print(dataset)
-    for raw_record in dataset.take(1):
-        example = tf.train.Example()
-        example.ParseFromString(raw_record.numpy())
-        print(example)
+    inputs = list()
+    outputs = list()
+    valid_ct = 0
+    fail_ct = 0
+    for i in range(100000):
+        try:
+            input, output = next(iter(dataset.take(1)))
+            valid_ct += 1
+            inputs = inputs.append(input)
+            outputs = outputs.append(output)
 
+        except Exception as e:
+            fail_ct += 1
+            continue
+
+    print(f'valid: {valid_ct}')
+    print(f'fail: {fail_ct}')
+    print(np.shape(inputs))
+    print(np.shape(outputs))"""
+    #base_path = '/cluster/scratch/fboesel/data/ai4good'
+    base_path = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/data'
+    data_dir = os.path.join(base_path, 'Change_Detection_ARD')
+    batch_size = 8
+    image_size = 256
+    device = 'cpu'
+    model_dir = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/ai4good/models/efficientnet-b3_1000_2021-12-08_18:32:56_best_model.pth'
+    train_loader, val_loader = get_dataloader(data_dir, image_size, batch_size)
+    model = torch.load(model_dir, map_location=torch.device('cpu'))
+    visualize_predictions(train_loader, model)
     #torch_dataset, numpy_dataset = convert_tf_to_torch(dataset)
+
+

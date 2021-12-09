@@ -22,12 +22,15 @@ from utils.data_utils import *
 
 def new_train(model, train_loader, val_loader, learning_rate, epochs, device, save_path, criterion):
 
-    if criterion == ['iou', 'jaccard']:
+    if criterion in ['iou', 'jaccard']:
         loss = smp.utils.losses.JaccardLoss()
+        lossname = 'jaccard_loss'
     elif criterion == 'weighted_bce':
         loss = smp.losses.TverskyLoss(mode='binary', smooth=0.1, alpha=0.05, beta=0.95)
+        lossname = 'loss'
     elif criterion in ['dice', 'f1']:
         loss = smp.utils.losses.DiceLoss()
+        lossname = 'dice_loss'
     else:
         print('loss not defined!')
         return model, 0
@@ -70,10 +73,10 @@ def new_train(model, train_loader, val_loader, learning_rate, epochs, device, sa
 
         wandb.log({'val_iou': valid_logs['iou_score'],
                    "val_f1": valid_logs['fscore'],
-                   "val_loss": valid_logs['dice_loss'],
+                   "val_loss": valid_logs[lossname],
                    "train_iou": train_logs['iou_score'],
                    "train_f1": train_logs['fscore'],
-                   "train_loss": train_logs['dice_loss']
+                   "train_loss": train_logs[lossname]
                    })
 
         # do something (save model, change lr, etc.)
@@ -277,21 +280,22 @@ def train_nesnet(model, train_loader, val_loader, epochs):
 
 
 if __name__ == '__main__':
+
     time = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
 
     epochs = 1000
     image_size = 256
-    batch_size = 16
+    batch_size = 24
     device = 'cuda'
     learning_rate = 0.0001
     activation = 'sigmoid'
-    encoder = 'resnet34'
+    encoder = 'efficientnet-b3'
     # weighted_bce , iou
     criterion = 'dice'
 
     base_path = '/cluster/scratch/fboesel/data/ai4good'
     # base_path = '/Users/fredericboesel/Documents/master/herbst21/AI4Good/data'
-    data_dir = os.path.join(base_path, 'tf_records')
+    data_dir = os.path.join(base_path, 'Change_Detection_ARD')
     save_path = os.path.join(base_path, f'models/{encoder}_{epochs}_{time}')
 
     model = smp.Unet(
@@ -312,7 +316,7 @@ if __name__ == '__main__':
     }
     wandb.init(project="ai4good", entity="fboesel", config=config)
 
-    train_loader, val_loader = get_dataloader_tfrecords(data_dir, batch_size)
+    train_loader, val_loader = get_dataloader(data_dir, image_size,batch_size)
 
     trained_model, mIoU = new_train(model, train_loader, val_loader, learning_rate, epochs, device, save_path=save_path, criterion=criterion)
 

@@ -87,22 +87,25 @@ class CropDatasetReader(Dataset):
         # handle the crop based on the data structure to return image and mask:
         ######## custom ###########
         crop = np.nan_to_num(crop)
-        crop[3, :, :] = np.round(crop[3, :, :] / 255.0)
+        crop[, :, :] = np.round(crop[3, :, :] / 255.0)
         # this depends on where the x and y channels are in the tif
         image = torch.from_numpy(crop[0:2, :, :])
         reference_image = torch.from_numpy(crop[-2:, :, :])
         image = torch.cat((image, reference_image), 0)
         mask = torch.from_numpy(crop[3, :, :])
 
-        # apply augmentations
-        if self.augmentation:
-            sample = self.augmentation(image=image, mask=mask)
-            image, mask = sample['image'], sample['mask']
+
 
         # apply preprocessing
         if self.preprocessing:
             sample = self.preprocessing(image=image, mask=mask)
             image, mask = sample['image'], sample['mask']
+
+        # apply augmentations
+        if self.augmentation:
+            sample = self.augmentation(image=image, mask=mask)
+            image, mask = sample['image'], sample['mask']
+
         return image, mask
 
     def close(self):
