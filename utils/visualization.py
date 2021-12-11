@@ -37,7 +37,23 @@ def sar_to_rgb(sar_image: np.ndarray):
     sar_image_clipped = np.clip(sar_image, _SAR_GRD_MIN, _SAR_GRD_MAX)
     rg = (sar_image_clipped - _SAR_GRD_MIN) * (255 / (_SAR_GRD_MAX - _SAR_GRD_MIN))
     # Create b channel by dividing the first channel by the second
-    b = np.clip(sar_image[:, :, 0] / sar_image[:, :, 1], 0, 2) * (255 / 2)
+    b = np.clip(sar_image[:, :, (0,)] / sar_image[:, :, (1,)], 0, 2) * (255 / 2)
     # Concatenate, round and convert to uint8
-    rgb = np.concatenate([rg, np.expand_dims(b, axis=2)], axis=2)
+    rgb = np.concatenate([rg, b], axis=2)
+
     return np.rint(rgb).astype(np.uint8)
+
+
+def sar_to_grayscale(sar_image: np.ndarray):
+    """
+    Renders a single or multi-channel SAR image as gray-scale
+    """
+    if sar_image.ndim != 3:
+        raise ValueError("SAR image should be a 3-dimensional array!")
+    # Use only the first channel
+    sar_image_0 = sar_image[:, :, (0,)]
+    # Rescale to [0, 255]
+    sar_image_0_clipped = np.clip(sar_image_0, _SAR_GRD_MIN, _SAR_GRD_MAX)
+    gray = (sar_image_0_clipped - _SAR_GRD_MIN) * (255 / (_SAR_GRD_MAX - _SAR_GRD_MIN))
+    # Round and convert to uin8
+    return np.rint(gray).astype(np.uint8)
