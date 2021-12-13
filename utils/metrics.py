@@ -23,3 +23,4 @@ def IoU(y_pred, y_true, smooth=1):
     union = torch.sum(y_true)+torch.sum(y_pred) - intersection
     iou = torch.mean((intersection + smooth) / (union + smooth))
     return iou
+
