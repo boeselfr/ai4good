@@ -65,12 +65,13 @@ def train(
     max_score = 0
 
     for i in range(0, epochs):
-
         print("\nEpoch: {}".format(i))
+        torch.cuda.empty_cache()
         train_logs = train_epoch.run(train_loader)
         valid_logs = valid_epoch.run(val_loader)
 
         if record_metrics:
+            # predict on random batch train and val and log:
             wandb.log(
                 {
                     "val_iou": valid_logs["iou_score"],
@@ -79,8 +80,37 @@ def train(
                     "train_iou": train_logs["iou_score"],
                     "train_f1": train_logs["fscore"],
                     "train_loss": train_logs[lossname],
-                }
-            )
+                })
+            if i % 25 == 0:
+                train_x, train_y = next(iter(train_loader))
+                train_out = model(torch.tensor(train_x, device=device))
+                # transform for plotting:
+                train_x = torch.moveaxis(train_x, 1, -1)
+                train_y = torch.moveaxis(train_y, 1, -1)
+                train_out = torch.moveaxis(train_out, 1,-1)
+                val_x, val_y = next(iter(val_loader))
+                val_out = model(torch.tensor(val_x, device=device))
+                # transform for plotting:
+                val_x = torch.moveaxis(val_x, 1, -1)
+                val_y = torch.moveaxis(val_y, 1, -1)
+                val_out = torch.moveaxis(val_out, 1, -1)
+                for idx in range(batch_size):
+                    wandb.log({
+                        "train_prediction_series":[
+                            wandb.Image(train_x.cpu().detach().numpy()[idx, :, :, 0], caption='vv_before'),
+                            wandb.Image(train_x.cpu().detach().numpy()[idx, :, :, 2], caption='vv_after'),
+                            wandb.Image(train_x.cpu().detach().numpy()[idx, :, :, 1], caption='vh_before'),
+                            wandb.Image(train_x.cpu().detach().numpy()[idx, :, :, 3],caption='vh_after'),
+                            wandb.Image(train_y.cpu().detach().numpy()[idx, :, :, :], caption='groundtruth'),
+                            wandb.Image(train_out.cpu().detach().numpy()[idx, :, :, :], caption='prediction')],
+                        "val_prediction_series": [
+                            wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 0], caption='vv_before'),
+                            wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 2], caption='vv_after'),
+                            wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 1], caption='vh_before'),
+                            wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 3], caption='vh_after'),
+                            wandb.Image(val_y.cpu().detach().numpy()[idx, :, :, :], caption='groundtruth'),
+                            wandb.Image(val_out.cpu().detach().numpy()[idx, :, :, :], caption='prediction')]
+                    })
 
         # do something (save model, change lr, etc.)
         if max_score < valid_logs["iou_score"]:
@@ -168,7 +198,7 @@ if __name__ == "__main__":
 
     models_dir = os.path.join(data_dir_path, "models")
     os.makedirs(models_dir, exist_ok=True)
-    save_path = os.path.join(models_dir, f"models/{encoder}_{epochs}_{time}")
+    save_path = os.path.join(models_dir, f"{encoder}_{epochs}_{time}")
 
     model = smp.Unet(
         encoder_name=encoder,
