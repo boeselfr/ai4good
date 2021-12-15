@@ -38,6 +38,8 @@ def train(
     metrics = [
         smp.utils.metrics.IoU(threshold=0.5),
         smp.utils.metrics.Fscore(threshold=0.5),
+        smp.utils.metrics.Recall(threshold=0.5),
+        smp.utils.metrics.Precision(threshold=0.5),
     ]
 
     optimizer = torch.optim.Adam(
@@ -82,24 +84,16 @@ def train(
                     "train_loss": train_logs[lossname],
                 })
             if i % 25 == 0:
-                train_x, train_y = next(iter(train_loader))
 
+                train_x, train_y = next(iter(train_loader))
                 train_out = model(torch.tensor(train_x, device=device))
                 # transform for plotting:
                 train_x = torch.moveaxis(train_x, 1, -1)
                 train_y = torch.moveaxis(train_y, 1, -1)
                 train_out = torch.moveaxis(train_out, 1,-1)
-                val_x, val_y = next(iter(val_loader))
-                val_out = model(torch.tensor(val_x, device=device))
-                # transform for plotting:
-                val_x = torch.moveaxis(val_x, 1, -1)
-                val_y = torch.moveaxis(val_y, 1, -1)
-                val_out = torch.moveaxis(val_out, 1, -1)
 
                 flat_train_im = torch.flatten(train_x).view(-1)
-                flat_val_im = torch.flatten(val_x).view(-1)
-                train_table = wandb.Table(data=[[v] for v in flat_train_im], columns=['pixel_values'])
-                val_table = wandb.Table(data=[[v] for v in flat_val_im], columns=['pixel_values'])
+                train_table = wandb.Table(data=[[v] for v in flat_train_im], columns=['train_pixel_values'])
 
                 for idx in range(batch_size):
                     wandb.log({
@@ -110,6 +104,23 @@ def train(
                             wandb.Image(train_x.cpu().detach().numpy()[idx, :, :, 3],caption='vh_after'),
                             wandb.Image(train_y.cpu().detach().numpy()[idx, :, :, :], caption='groundtruth'),
                             wandb.Image(train_out.cpu().detach().numpy()[idx, :, :, :], caption='prediction')],
+                        "train_hist": wandb.plot.histogram(train_table, 'train_pixel_values')
+                    })
+
+                del train_x, train_y, train_out, flat_train_im, train_table
+
+                val_x, val_y = next(iter(val_loader))
+                val_out = model(torch.tensor(val_x, device=device))
+                # transform for plotting:
+                val_x = torch.moveaxis(val_x, 1, -1)
+                val_y = torch.moveaxis(val_y, 1, -1)
+                val_out = torch.moveaxis(val_out, 1, -1)
+
+                flat_val_im = torch.flatten(val_x).view(-1)
+                val_table = wandb.Table(data=[[v] for v in flat_val_im], columns=['val_pixel_values'])
+
+                for idx in range(batch_size):
+                    wandb.log({
                         "val_prediction_series": [
                             wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 0], caption='vv_before'),
                             wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 2], caption='vv_after'),
@@ -117,9 +128,11 @@ def train(
                             wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 3], caption='vh_after'),
                             wandb.Image(val_y.cpu().detach().numpy()[idx, :, :, :], caption='groundtruth'),
                             wandb.Image(val_out.cpu().detach().numpy()[idx, :, :, :], caption='prediction')],
-                        "train_hist": wandb.plot.histogram(train_table, 'train_pixel_values'),
                         "val_hist": wandb.plot.histogram(val_table, 'val_pixel_values')
                     })
+
+                del val_x, val_y, val_out, flat_val_im, val_table
+
 
         # do something (save model, change lr, etc.)
         if max_score < valid_logs["iou_score"]:
@@ -181,6 +194,24 @@ def _parse_args():
         help="Record metrics to W&B",
     )
 
+    parser.add_argument(
+        "-m",
+        "--model",
+        choices=['unet', 'deeplabv3', 'unet++', 'deeplabv3+'],
+        type=str,
+        default='unet',
+        help="model to use for training"
+    )
+
+    parser.add_argument(
+        "--backbone",
+        choices=['efficientnet-b0','efficientnet-b1','efficientnet-b2','efficientnet-b3', 'resnet18', 'resnet34',
+                 'timm-efficientnet-b0', 'timm-efficientnet-b1','timm-efficientnet-b2', 'timm-efficientnet-b3'],
+        type=str,
+        default="efficientnet-b3",
+        help="backbone to use in the model"
+    )
+
     return parser.parse_args()
 
 
@@ -194,13 +225,15 @@ if __name__ == "__main__":
     data_dir_path = args.data_dir
     output_dir_path = args.output_dir
     batch_size = args.batch_size
+    modelname = args.model
+    encoder = args.backbone
 
     image_size = 256
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     learning_rate = 0.0001
     activation = "sigmoid"
-    encoder = "efficientnet-b3"
     criterion = "dice"
+    augmentations = None
 
     train_data_dir = os.path.join(data_dir_path, "train")
     val_data_dir = os.path.join(data_dir_path, "val")
@@ -209,12 +242,35 @@ if __name__ == "__main__":
     os.makedirs(models_dir, exist_ok=True)
     save_path = os.path.join(models_dir, f"{encoder}_{epochs}_{time}")
 
-    model = smp.Unet(
-        encoder_name=encoder,
-        in_channels=4,
-        activation=activation,
-        classes=1,
-    )
+    if modelname == 'unet':
+        model = smp.Unet(
+            encoder_name=encoder,
+            in_channels=4,
+            activation=activation,
+            classes=1
+        )
+    elif modelname == 'deeplabv3':
+        model = smp.DeepLabV3(
+            encoder_name=encoder,
+            in_channels=4,
+            activation=activation,
+            classes=1
+        )
+    elif modelname == 'unet++':
+        model = smp.UnetPlusPlus(
+            encoder_name=encoder,
+            in_channels=4,
+            activation=activation,
+            classes=1
+        )
+    elif modelname == 'deeplabv3+':
+        model = smp.DeepLabV3Plus(
+            encoder_name=encoder,
+            in_channels=4,
+            activation=activation,
+            classes=1
+        )
+
 
     if args.record_metrics:
         config = {
@@ -225,14 +281,15 @@ if __name__ == "__main__":
             "data_dir": data_dir_path,
             "criterion": criterion,
             "activation": activation,
+            "model": modelname
         }
         wandb.init(project="ai4good", config=config)
 
     train_loader = dataloaders.get_tfrecord_dataloader(
-        train_data_dir, batch_size=batch_size
+        train_data_dir, batch_size=batch_size, augmentation=True, despeckle=False
     )
     val_loader = dataloaders.get_tfrecord_dataloader(
-        val_data_dir, batch_size=batch_size
+        val_data_dir, batch_size=batch_size, augmentation=False, despeckle=False
     )
 
     trained_model, mIoU = train(
