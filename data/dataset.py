@@ -1,12 +1,13 @@
-import functools
+from typing import Optional
+
 import tensorflow as tf
 
-physical_devices = tf.config.list_physical_devices('GPU')
+physical_devices = tf.config.list_physical_devices("GPU")
 try:
-  tf.config.experimental.set_memory_growth(physical_devices[0], True)
+    tf.config.experimental.set_memory_growth(physical_devices[0], True)
 except:
-  # Invalid device or cannot modify virtual devices once initialized.
-  pass
+    # Invalid device or cannot modify virtual devices once initialized.
+    pass
 
 from data.globals import SAR_EXPORT_BANDS, MSO_EXPORT_BANDS, RESPONSES
 
@@ -56,7 +57,9 @@ def _to_tuple(inputs, features, transpose=False):
 
 def get_dataset(
     file_pattern: str,
-    include_mso: bool = True,
+    include_mso: bool = False,
+    transpose: bool = False,
+    min_pos_ratio: Optional[float] = 0.01,
 ) -> tf.data.Dataset:
     """Function to fetch a TFRecord deforestation detection dataset from GCS.
     Note: to access GCS you need to authenticate or to set the environment
@@ -68,6 +71,9 @@ def get_dataset(
     Returns:
       A tuple of (inputs, outputs).
     """
+    if min_pos_ratio is not None and (min_pos_ratio < 0 or min_pos_ratio > 1.0):
+        raise ValueError("min_pos_ratio must be either null or non-negative and < 1.0")
+
     glob = tf.io.gfile.glob(file_pattern)
     dataset = tf.data.TFRecordDataset(glob, compression_type="GZIP")
     dataset = dataset.map(_parse_tfrecord, num_parallel_calls=5)
@@ -76,6 +82,26 @@ def get_dataset(
         features = _FEATURES
     else:
         features = SAR_EXPORT_BANDS + RESPONSES
-    to_tuple_fn = functools.partial(_to_tuple, features=features)
+
+    if min_pos_ratio is not None:
+
+        def filter_fn(x):
+            output = x.get(RESPONSES[0])
+            pos = tf.cast(tf.math.count_nonzero(output), tf.float32)
+            total = tf.cast(tf.size(output), tf.float32)
+            pos_ratio = pos / total
+            return pos_ratio > min_pos_ratio
+
+        dataset = dataset.filter(filter_fn)
+
+    # Convert dataset to (inputs, output) tuples
+    def to_tuple_fn(inputs):
+        return _to_tuple(
+            inputs=inputs,
+            features=features,
+            transpose=transpose,
+        )
+
     dataset = dataset.map(to_tuple_fn, num_parallel_calls=5)
+
     return dataset

@@ -1,5 +1,6 @@
 import argparse
 import datetime
+import math
 
 import ee
 
@@ -14,12 +15,14 @@ _AOI_ASSET_IDS = {
     "para": "users/albanesegiuliano97/para_state_simple",
     "brazil_simple": "users/albanesegiuliano97/brazil_simple",
     "sample_area_1": "users/albanesegiuliano97/sample_area_1",
-    "sample_area_2": "users/albanesegiuliano97/sample_area_2",  # Just a rectangle in the Para' state
+    "sample_area_2": "users/albanesegiuliano97/sample_area_2",
     "sampling_rectangles_1": "users/albanesegiuliano97/ai4good/sampling_rectangles_1",
+    "sampling_rectangles_2": "users/albanesegiuliano97/ai4good/sampling_rectangles_2",
 }
 
 _MAPBIOMAS_2020_ASSET_ID = "users/albanesegiuliano97/mapbiomas_2020"
 _MAPBIOMAS_2020_DETECTION_DATE_COLUMN_NAME = "DataDetec"
+_MAX_SAMPLES_PER_SHARD = 20
 
 
 def _validate_date(date: str):
@@ -46,9 +49,10 @@ def _get_mapbiomas_2020():
     return fc.map(add_time_start_fn)
 
 
-def _get_s1(start_date, end_date):
+def _get_s1(start_date, end_date, log_scale=True):
+    ic = "COPERNICUS/S1_GRD" if log_scale else "COPERNICUS/S1_GRD_FLOAT"
     return (
-        ee.ImageCollection("COPERNICUS/S1_GRD")
+        ee.ImageCollection(ic)
         .filterDate(start_date, end_date)
         .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VV"))
         .filter(ee.Filter.listContains("transmitterReceiverPolarisation", "VH"))
@@ -97,7 +101,11 @@ def _make_deforestation_mask(
 
 
 def _make_time_series_with_groundtruth(
-    before_image, after_image, multispectral_composite, difference_mask, aoi
+    before_image,
+    after_image,
+    multispectral_composite,
+    difference_mask,
+    aoi,
 ):
     image = before_image.rename(SAR_EXPORT_BANDS[:2])
 
@@ -111,8 +119,10 @@ def _make_time_series_with_groundtruth(
 
 
 def create_deforestation_detection_dataset(
+    name: str,
     start_date: str,
     end_date: str,
+    log_scale: bool,
     area_of_interest: str,
     months_before_acquisition: int,
     scale: int,
@@ -134,37 +144,43 @@ def create_deforestation_detection_dataset(
     deforest_polygons_ee = _get_mapbiomas_2020()
 
     # Configure export params
-    num_shards_per_image = 10
-    num_samples_per_shard = num_samples_per_area / num_shards_per_image
+    num_shards_per_area = math.ceil(num_samples_per_area / _MAX_SAMPLES_PER_SHARD)
+    num_samples_per_shard = min(
+        math.ceil(num_samples_per_area / num_shards_per_area),
+        _MAX_SAMPLES_PER_SHARD,
+    )
 
     # Initialize patch sampler
     patch_sampler = PatchSampler(
         kernel_size=kernel_size,
         scale=scale,
-        num_shards=num_shards_per_image,
+        num_shards=num_shards_per_area,
         num_samples_per_shard=num_samples_per_shard,
     )
 
     # Define export parameters
     bands = SAR_EXPORT_BANDS + MSO_EXPORT_BANDS + RESPONSES
-    shard_basename = "deforest-training-patches"
     bucket = "ai4good-3b"
-    export_folder = (
-        "deforest-training_"
-        + area_of_interest
-        + "_"
-        + start_date.replace("-", "")
-        + "_"
-        + end_date.replace("-", "")
-        + "_"
-        + f"scale-{scale}"
+    export_folder = "_".join(
+        [
+            name,
+            area_of_interest,
+            start_date.replace("-", ""),
+            end_date.replace("-", ""),
+            f"scale-{scale}",
+            "db" if log_scale else "float",
+            f"{months_before_acquisition}mba",
+            f"{num_samples_per_area}spa",
+        ]
     )
 
     # Get Sentinel-1
     before_end_date = start_date_ee.advance(-(months_before_acquisition + 1), "month")
     before_start_date = before_end_date.advance(-1, "month")
-    s1_before = _get_s1(before_start_date, before_end_date).sort("system:time_start")
-    s1_after = _get_s1(start_date_ee, end_date_ee).sort("system:time_start")
+    s1_before = _get_s1(before_start_date, before_end_date, log_scale).sort(
+        "system:time_start"
+    )
+    s1_after = _get_s1(start_date_ee, end_date_ee, log_scale).sort("system:time_start")
 
     # Now loop over the aoi polygons
     train_aoi_polygons_list = train_aoi_polygons.toList(train_aoi_polygons.size())
@@ -201,7 +217,7 @@ def create_deforestation_detection_dataset(
         samples = patch_sampler.sample_image(time_series)
 
         # Export as TFRecord
-        desc = shard_basename + "_" + str(g)
+        desc = name + "_" + str(g)
         task = ee.batch.Export.table.toCloudStorage(
             collection=samples,
             description=desc,
@@ -227,6 +243,14 @@ def _parse_args():
     )
 
     parser.add_argument(
+        "-n",
+        "--name",
+        required=True,
+        type=str,
+        help="The name to prepend to the dataset directory",
+    )
+
+    parser.add_argument(
         "-sd",
         "--start-date",
         required=True,
@@ -240,6 +264,12 @@ def _parse_args():
         required=True,
         type=str,
         help="The end date.",
+    )
+
+    parser.add_argument(
+        "--log-scale",
+        action="store_true",
+        help="Use log scale backscattering values.",
     )
 
     parser.add_argument(
@@ -287,8 +317,10 @@ def _parse_args():
 if __name__ == "__main__":
     args = _parse_args()
     create_deforestation_detection_dataset(
+        name=args.name,
         start_date=args.start_date,
         end_date=args.end_date,
+        log_scale=args.log_scale,
         area_of_interest=args.area_of_interest,
         months_before_acquisition=args.months_before_acquisition,
         scale=args.scale,
