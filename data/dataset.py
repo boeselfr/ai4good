@@ -4,9 +4,11 @@ import tensorflow as tf
 
 physical_devices = tf.config.list_physical_devices("GPU")
 try:
+    # NOTE(albanesg): since we are using PyTorch for training, we have to
+    # set this to prevent TensorFlow from allocating all the GPU memory
+    # just to make a call to the tf.data API.
     tf.config.experimental.set_memory_growth(physical_devices[0], True)
 except:
-    # Invalid device or cannot modify virtual devices once initialized.
     pass
 
 from data.globals import SAR_EXPORT_BANDS, MSO_EXPORT_BANDS, RESPONSES
@@ -55,6 +57,22 @@ def _to_tuple(inputs, features, transpose=False):
         return stacked[: -len(RESPONSES), :, :], stacked[-len(RESPONSES) :, :, :]
 
 
+def load_and_parse_dataset(
+    file_pattern: str,
+) -> tf.data.Dataset:
+    """Load dataset from a collection of TFRecord files.
+
+    The absolute paths of the TFRecords should match the given file_pattern.
+
+    Args:
+      file_pattern: a glob expression to find the TFRecord files
+    """
+    glob = tf.io.gfile.glob(file_pattern)
+    dataset = tf.data.TFRecordDataset(glob, compression_type="GZIP")
+    dataset = dataset.map(_parse_tfrecord, num_parallel_calls=5)
+    return dataset
+
+
 def get_dataset(
     file_pattern: str,
     include_mso: bool = False,
@@ -74,9 +92,7 @@ def get_dataset(
     if min_pos_ratio is not None and (min_pos_ratio < 0 or min_pos_ratio > 1.0):
         raise ValueError("min_pos_ratio must be either null or non-negative and < 1.0")
 
-    glob = tf.io.gfile.glob(file_pattern)
-    dataset = tf.data.TFRecordDataset(glob, compression_type="GZIP")
-    dataset = dataset.map(_parse_tfrecord, num_parallel_calls=5)
+    dataset = load_and_parse_dataset(file_pattern=file_pattern)
 
     if include_mso:
         features = _FEATURES

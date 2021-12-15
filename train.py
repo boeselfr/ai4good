@@ -7,6 +7,7 @@ import torch
 import wandb
 
 from utils import dataloaders
+from utils.preprocessing import normalize
 
 
 def train(
@@ -25,8 +26,7 @@ def train(
         loss = smp.utils.losses.JaccardLoss()
         lossname = "jaccard_loss"
     elif criterion == "weighted_bce":
-        loss = smp.losses.TverskyLoss(
-            mode="binary", smooth=0.1, alpha=0.05, beta=0.95)
+        loss = smp.losses.TverskyLoss(mode="binary", smooth=0.1, alpha=0.05, beta=0.95)
         lossname = "loss"
     elif criterion in ["dice", "f1"]:
         loss = smp.utils.losses.DiceLoss()
@@ -42,8 +42,7 @@ def train(
         smp.utils.metrics.Precision(threshold=0.5),
     ]
 
-    optimizer = torch.optim.Adam(
-        [dict(params=model.parameters(), lr=learning_rate)])
+    optimizer = torch.optim.Adam([dict(params=model.parameters(), lr=learning_rate)])
 
     # create epoch runners
     # it is a simple loop of iterating over dataloader`s samples
@@ -82,7 +81,8 @@ def train(
                     "train_iou": train_logs["iou_score"],
                     "train_f1": train_logs["fscore"],
                     "train_loss": train_logs[lossname],
-                })
+                }
+            )
             if i % 25 == 0:
 
                 train_x, train_y = next(iter(train_loader))
@@ -90,22 +90,47 @@ def train(
                 # transform for plotting:
                 train_x = torch.moveaxis(train_x, 1, -1)
                 train_y = torch.moveaxis(train_y, 1, -1)
-                train_out = torch.moveaxis(train_out, 1,-1)
+                train_out = torch.moveaxis(train_out, 1, -1)
 
                 flat_train_im = torch.flatten(train_x).view(-1)
-                train_table = wandb.Table(data=[[v] for v in flat_train_im], columns=['train_pixel_values'])
+                train_table = wandb.Table(
+                    data=[[v] for v in flat_train_im], columns=["train_pixel_values"]
+                )
 
                 for idx in range(batch_size):
-                    wandb.log({
-                        "train_prediction_series":[
-                            wandb.Image(train_x.cpu().detach().numpy()[idx, :, :, 0], caption='vv_before'),
-                            wandb.Image(train_x.cpu().detach().numpy()[idx, :, :, 2], caption='vv_after'),
-                            wandb.Image(train_x.cpu().detach().numpy()[idx, :, :, 1], caption='vh_before'),
-                            wandb.Image(train_x.cpu().detach().numpy()[idx, :, :, 3],caption='vh_after'),
-                            wandb.Image(train_y.cpu().detach().numpy()[idx, :, :, :], caption='groundtruth'),
-                            wandb.Image(train_out.cpu().detach().numpy()[idx, :, :, :], caption='prediction')],
-                        "train_hist": wandb.plot.histogram(train_table, 'train_pixel_values')
-                    })
+                    wandb.log(
+                        {
+                            "train_prediction_series": [
+                                wandb.Image(
+                                    train_x.cpu().detach().numpy()[idx, :, :, 0],
+                                    caption="vv_before",
+                                ),
+                                wandb.Image(
+                                    train_x.cpu().detach().numpy()[idx, :, :, 2],
+                                    caption="vv_after",
+                                ),
+                                wandb.Image(
+                                    train_x.cpu().detach().numpy()[idx, :, :, 1],
+                                    caption="vh_before",
+                                ),
+                                wandb.Image(
+                                    train_x.cpu().detach().numpy()[idx, :, :, 3],
+                                    caption="vh_after",
+                                ),
+                                wandb.Image(
+                                    train_y.cpu().detach().numpy()[idx, :, :, :],
+                                    caption="groundtruth",
+                                ),
+                                wandb.Image(
+                                    train_out.cpu().detach().numpy()[idx, :, :, :],
+                                    caption="prediction",
+                                ),
+                            ],
+                            "train_hist": wandb.plot.histogram(
+                                train_table, "train_pixel_values"
+                            ),
+                        }
+                    )
 
                 del train_x, train_y, train_out, flat_train_im, train_table
 
@@ -117,22 +142,46 @@ def train(
                 val_out = torch.moveaxis(val_out, 1, -1)
 
                 flat_val_im = torch.flatten(val_x).view(-1)
-                val_table = wandb.Table(data=[[v] for v in flat_val_im], columns=['val_pixel_values'])
+                val_table = wandb.Table(
+                    data=[[v] for v in flat_val_im], columns=["val_pixel_values"]
+                )
 
                 for idx in range(batch_size):
-                    wandb.log({
-                        "val_prediction_series": [
-                            wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 0], caption='vv_before'),
-                            wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 2], caption='vv_after'),
-                            wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 1], caption='vh_before'),
-                            wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 3], caption='vh_after'),
-                            wandb.Image(val_y.cpu().detach().numpy()[idx, :, :, :], caption='groundtruth'),
-                            wandb.Image(val_out.cpu().detach().numpy()[idx, :, :, :], caption='prediction')],
-                        "val_hist": wandb.plot.histogram(val_table, 'val_pixel_values')
-                    })
+                    wandb.log(
+                        {
+                            "val_prediction_series": [
+                                wandb.Image(
+                                    val_x.cpu().detach().numpy()[idx, :, :, 0],
+                                    caption="vv_before",
+                                ),
+                                wandb.Image(
+                                    val_x.cpu().detach().numpy()[idx, :, :, 2],
+                                    caption="vv_after",
+                                ),
+                                wandb.Image(
+                                    val_x.cpu().detach().numpy()[idx, :, :, 1],
+                                    caption="vh_before",
+                                ),
+                                wandb.Image(
+                                    val_x.cpu().detach().numpy()[idx, :, :, 3],
+                                    caption="vh_after",
+                                ),
+                                wandb.Image(
+                                    val_y.cpu().detach().numpy()[idx, :, :, :],
+                                    caption="groundtruth",
+                                ),
+                                wandb.Image(
+                                    val_out.cpu().detach().numpy()[idx, :, :, :],
+                                    caption="prediction",
+                                ),
+                            ],
+                            "val_hist": wandb.plot.histogram(
+                                val_table, "val_pixel_values"
+                            ),
+                        }
+                    )
 
                 del val_x, val_y, val_out, flat_val_im, val_table
-
 
         # do something (save model, change lr, etc.)
         if max_score < valid_logs["iou_score"]:
@@ -197,19 +246,29 @@ def _parse_args():
     parser.add_argument(
         "-m",
         "--model",
-        choices=['unet', 'deeplabv3', 'unet++', 'deeplabv3+'],
+        choices=["unet", "deeplabv3", "unet++", "deeplabv3+"],
         type=str,
-        default='unet',
-        help="model to use for training"
+        default="unet",
+        help="model to use for training",
     )
 
     parser.add_argument(
         "--backbone",
-        choices=['efficientnet-b0','efficientnet-b1','efficientnet-b2','efficientnet-b3', 'resnet18', 'resnet34',
-                 'timm-efficientnet-b0', 'timm-efficientnet-b1','timm-efficientnet-b2', 'timm-efficientnet-b3'],
+        choices=[
+            "efficientnet-b0",
+            "efficientnet-b1",
+            "efficientnet-b2",
+            "efficientnet-b3",
+            "resnet18",
+            "resnet34",
+            "timm-efficientnet-b0",
+            "timm-efficientnet-b1",
+            "timm-efficientnet-b2",
+            "timm-efficientnet-b3",
+        ],
         type=str,
         default="efficientnet-b3",
-        help="backbone to use in the model"
+        help="backbone to use in the model",
     )
 
     return parser.parse_args()
@@ -242,35 +301,22 @@ if __name__ == "__main__":
     os.makedirs(models_dir, exist_ok=True)
     save_path = os.path.join(models_dir, f"{encoder}_{epochs}_{time}")
 
-    if modelname == 'unet':
+    if modelname == "unet":
         model = smp.Unet(
-            encoder_name=encoder,
-            in_channels=4,
-            activation=activation,
-            classes=1
+            encoder_name=encoder, in_channels=4, activation=activation, classes=1
         )
-    elif modelname == 'deeplabv3':
+    elif modelname == "deeplabv3":
         model = smp.DeepLabV3(
-            encoder_name=encoder,
-            in_channels=4,
-            activation=activation,
-            classes=1
+            encoder_name=encoder, in_channels=4, activation=activation, classes=1
         )
-    elif modelname == 'unet++':
+    elif modelname == "unet++":
         model = smp.UnetPlusPlus(
-            encoder_name=encoder,
-            in_channels=4,
-            activation=activation,
-            classes=1
+            encoder_name=encoder, in_channels=4, activation=activation, classes=1
         )
-    elif modelname == 'deeplabv3+':
+    elif modelname == "deeplabv3+":
         model = smp.DeepLabV3Plus(
-            encoder_name=encoder,
-            in_channels=4,
-            activation=activation,
-            classes=1
+            encoder_name=encoder, in_channels=4, activation=activation, classes=1
         )
-
 
     if args.record_metrics:
         config = {
@@ -281,15 +327,23 @@ if __name__ == "__main__":
             "data_dir": data_dir_path,
             "criterion": criterion,
             "activation": activation,
-            "model": modelname
+            "model": modelname,
         }
         wandb.init(project="ai4good", config=config)
 
     train_loader = dataloaders.get_tfrecord_dataloader(
-        train_data_dir, batch_size=batch_size, augmentation=True, despeckle=False
+        train_data_dir,
+        batch_size=batch_size,
+        normalize=False,
+        augmentation=True,
+        despeckle=False,
     )
     val_loader = dataloaders.get_tfrecord_dataloader(
-        val_data_dir, batch_size=batch_size, augmentation=False, despeckle=False
+        val_data_dir,
+        batch_size=batch_size,
+        normalize=False,
+        augmentation=False,
+        despeckle=False,
     )
 
     trained_model, mIoU = train(
