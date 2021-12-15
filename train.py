@@ -38,6 +38,8 @@ def train(
     metrics = [
         smp.utils.metrics.IoU(threshold=0.5),
         smp.utils.metrics.Fscore(threshold=0.5),
+        smp.utils.metrics.Recall(threshold=0.5),
+        smp.utils.metrics.Precision(threshold=0.5),
     ]
 
     optimizer = torch.optim.Adam(
@@ -284,10 +286,10 @@ if __name__ == "__main__":
         wandb.init(project="ai4good", config=config)
 
     train_loader = dataloaders.get_tfrecord_dataloader(
-        train_data_dir, batch_size=batch_size, augmentation=True
+        train_data_dir, batch_size=batch_size, augmentation=True, despeckle=False
     )
     val_loader = dataloaders.get_tfrecord_dataloader(
-        val_data_dir, batch_size=batch_size, augmentation=False
+        val_data_dir, batch_size=batch_size, augmentation=False, despeckle=False
     )
 
     trained_model, mIoU = train(

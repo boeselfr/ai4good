@@ -7,6 +7,7 @@ from torch.utils import data
 import tensorflow as tf
 import tensorflow.keras.layers as layers
 from data.dataset import get_dataset
+from scipy.ndimage.filters import uniform_filter
 
 
 class TFIterableDataset(torch.utils.data.IterableDataset):
@@ -36,13 +37,13 @@ class Augment(tf.keras.layers.Layer):
         # both use the same seed, so they'll make the same randomn changes.
         self.augment_inputs = tf.keras.Sequential([
                 layers.experimental.preprocessing.RandomFlip("horizontal_and_vertical", seed=seed),
-                layers.experimental.preprocessing.RandomRotation(0.2),
+                #layers.experimental.preprocessing.RandomRotation(0.2),
                 #stddev has to be mathced here!
-                layers.GaussianNoise(stddev=1)
+                #layers.GaussianNoise(stddev=1)
             ])
         self.augment_labels = tf.keras.Sequential([
                 layers.experimental.preprocessing.RandomFlip("horizontal_and_vertical", seed=seed),
-                layers.experimental.preprocessing.RandomRotation(0.2)
+                #layers.experimental.preprocessing.RandomRotation(0.2)
             ])
 
     def call(self, inputs, labels):
@@ -51,10 +52,59 @@ class Augment(tf.keras.layers.Layer):
         return inputs, labels
 
 
+class Preprocess(tf.keras.layers.Layer):
+    def __init__(self, seed=42):
+        super().__init__()
+
+
+    def call(self, inputs, labels):
+
+        inputs = self.despeckle_inputs(inputs)
+        labels = self.despeckle_label(labels)
+        return inputs, labels
+
+    def despeckle_inputs(self, inputs):
+        # band: SAR data to be despeckled (already reshaped into image dimensions)
+        # window: descpeckling filter window (tuple)
+        # default noise variance = 0.25
+        # assumes noise mean = 0
+        # to tf tensor and then
+        inputs = inputs.numpy()
+        print(np.shape(inputs))
+        bands = 4
+        filtered_input = np.zeros(shape=np.shape(inputs))
+        for i in range(bands):
+            filtered_band = self.lee_filter(inputs[:,:,i])
+            filtered_input[:,:,i] = filtered_band
+        return tf.convert_to_tensor(filtered_input)
+
+    def lee_filter(self, band, window=5, var_noise=0.25):
+        mean_window = uniform_filter(band, window)
+        mean_sqr_window = uniform_filter(band ** 2, window)
+        var_window = mean_sqr_window - mean_window ** 2
+
+        weights = var_window / (var_window + var_noise)
+        band_filtered = mean_window + weights * (band - mean_window)
+        return band_filtered
+
+    def despeckle_label(self, label):
+        label = label.numpy()
+        print(np.shape(label))
+        bands = 1
+        filtered_input = np.zeros(shape=np.shape(label))
+        for i in range(bands):
+            filtered_band = self.lee_filter(label[:, :, i])
+            filtered_input[:, :, i] = filtered_band
+
+        return tf.convert_to_tensor(filtered_input)
+
+
+
 def get_tfrecord_dataloader(
     data_dir_path: str,
     batch_size: int = 8,
-    augmentation: bool = False
+    augmentation: bool = False,
+    despeckle: bool = False
 ):
     # Load the dataset from local storage or GCS
     file_pattern = os.path.join(data_dir_path, "*tfrecord*")
@@ -62,6 +112,9 @@ def get_tfrecord_dataloader(
 
     # Shuffle the dataset
     dataset = dataset.shuffle(buffer_size=128, seed=23)
+
+    if despeckle:
+        dataset = dataset.map(Preprocess())
 
     if augmentation:
         dataset = dataset.map(Augment())
