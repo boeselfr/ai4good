@@ -82,23 +82,16 @@ def train(
                     "train_loss": train_logs[lossname],
                 })
             if i % 25 == 0:
+
                 train_x, train_y = next(iter(train_loader))
                 train_out = model(torch.tensor(train_x, device=device))
                 # transform for plotting:
                 train_x = torch.moveaxis(train_x, 1, -1)
                 train_y = torch.moveaxis(train_y, 1, -1)
                 train_out = torch.moveaxis(train_out, 1,-1)
-                val_x, val_y = next(iter(val_loader))
-                val_out = model(torch.tensor(val_x, device=device))
-                # transform for plotting:
-                val_x = torch.moveaxis(val_x, 1, -1)
-                val_y = torch.moveaxis(val_y, 1, -1)
-                val_out = torch.moveaxis(val_out, 1, -1)
 
                 flat_train_im = torch.flatten(train_x).view(-1)
-                flat_val_im = torch.flatten(val_x).view(-1)
                 train_table = wandb.Table(data=[[v] for v in flat_train_im], columns=['train_pixel_values'])
-                val_table = wandb.Table(data=[[v] for v in flat_val_im], columns=['val_pixel_values'])
 
                 for idx in range(batch_size):
                     wandb.log({
@@ -109,6 +102,23 @@ def train(
                             wandb.Image(train_x.cpu().detach().numpy()[idx, :, :, 3],caption='vh_after'),
                             wandb.Image(train_y.cpu().detach().numpy()[idx, :, :, :], caption='groundtruth'),
                             wandb.Image(train_out.cpu().detach().numpy()[idx, :, :, :], caption='prediction')],
+                        "train_hist": wandb.plot.histogram(train_table, 'train_pixel_values')
+                    })
+
+                del train_x, train_y, train_out, flat_train_im, train_table
+
+                val_x, val_y = next(iter(val_loader))
+                val_out = model(torch.tensor(val_x, device=device))
+                # transform for plotting:
+                val_x = torch.moveaxis(val_x, 1, -1)
+                val_y = torch.moveaxis(val_y, 1, -1)
+                val_out = torch.moveaxis(val_out, 1, -1)
+
+                flat_val_im = torch.flatten(val_x).view(-1)
+                val_table = wandb.Table(data=[[v] for v in flat_val_im], columns=['val_pixel_values'])
+
+                for idx in range(batch_size):
+                    wandb.log({
                         "val_prediction_series": [
                             wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 0], caption='vv_before'),
                             wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 2], caption='vv_after'),
@@ -116,12 +126,11 @@ def train(
                             wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 3], caption='vh_after'),
                             wandb.Image(val_y.cpu().detach().numpy()[idx, :, :, :], caption='groundtruth'),
                             wandb.Image(val_out.cpu().detach().numpy()[idx, :, :, :], caption='prediction')],
-                        "train_hist": wandb.plot.histogram(train_table, 'train_pixel_values'),
                         "val_hist": wandb.plot.histogram(val_table, 'val_pixel_values')
                     })
-                del train_x, train_y, train_out
-                del val_x, val_y, val_out
-                del flat_train_im, flat_val_im, train_table, val_table
+
+                del val_x, val_y, val_out, flat_val_im, val_table
+
 
         # do something (save model, change lr, etc.)
         if max_score < valid_logs["iou_score"]:
@@ -222,6 +231,7 @@ if __name__ == "__main__":
     learning_rate = 0.0001
     activation = "sigmoid"
     criterion = "dice"
+    augmentations = None
 
     train_data_dir = os.path.join(data_dir_path, "train")
     val_data_dir = os.path.join(data_dir_path, "val")
@@ -274,10 +284,10 @@ if __name__ == "__main__":
         wandb.init(project="ai4good", config=config)
 
     train_loader = dataloaders.get_tfrecord_dataloader(
-        train_data_dir, batch_size=batch_size
+        train_data_dir, batch_size=batch_size, augmentation=True
     )
     val_loader = dataloaders.get_tfrecord_dataloader(
-        val_data_dir, batch_size=batch_size
+        val_data_dir, batch_size=batch_size, augmentation=False
     )
 
     trained_model, mIoU = train(
