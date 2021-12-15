@@ -83,6 +83,7 @@ def train(
                 })
             if i % 25 == 0:
                 train_x, train_y = next(iter(train_loader))
+
                 train_out = model(torch.tensor(train_x, device=device))
                 # transform for plotting:
                 train_x = torch.moveaxis(train_x, 1, -1)
@@ -94,6 +95,12 @@ def train(
                 val_x = torch.moveaxis(val_x, 1, -1)
                 val_y = torch.moveaxis(val_y, 1, -1)
                 val_out = torch.moveaxis(val_out, 1, -1)
+
+                flat_train_im = torch.flatten(train_x).view(-1)
+                flat_val_im = torch.flatten(val_x).view(-1)
+                train_table = wandb.Table(data=[[v] for v in flat_train_im], columns=['pixel_values'])
+                val_table = wandb.Table(data=[[v] for v in flat_val_im], columns=['pixel_values'])
+
                 for idx in range(batch_size):
                     wandb.log({
                         "train_prediction_series":[
@@ -109,7 +116,9 @@ def train(
                             wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 1], caption='vh_before'),
                             wandb.Image(val_x.cpu().detach().numpy()[idx, :, :, 3], caption='vh_after'),
                             wandb.Image(val_y.cpu().detach().numpy()[idx, :, :, :], caption='groundtruth'),
-                            wandb.Image(val_out.cpu().detach().numpy()[idx, :, :, :], caption='prediction')]
+                            wandb.Image(val_out.cpu().detach().numpy()[idx, :, :, :], caption='prediction')],
+                        "train_hist": wandb.plot.histogram(train_table, 'train_pixel_values'),
+                        "val_hist": wandb.plot.histogram(val_table, 'val_pixel_values')
                     })
 
         # do something (save model, change lr, etc.)
