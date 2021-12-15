@@ -17,14 +17,18 @@ class PatchSampler:
         self.num_shards = num_shards
         self.num_samples_per_shard = num_samples_per_shard
 
-    def sample_image(self, image: ee.Image) -> ee.FeatureCollection:
+    def sample_image(
+        self,
+        image: ee.Image,
+        region: ee.Geometry,
+    ) -> ee.FeatureCollection:
         array_image = image.float().neighborhoodToArray(self.kernel)
-        
+
         # Export all the training data (in many pieces), with one task per image
         samples = ee.FeatureCollection([])
         for j in range(self.num_shards):
             sample = array_image.sample(
-                region=None,
+                region=region,
                 scale=self.scale,
                 numPixels=self.num_samples_per_shard,
                 seed=j,
@@ -33,5 +37,3 @@ class PatchSampler:
             samples = samples.merge(sample)
 
         return samples
-
-        

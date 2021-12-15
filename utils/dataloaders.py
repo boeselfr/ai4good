@@ -9,6 +9,9 @@ import tensorflow.keras.layers as layers
 from data.dataset import get_dataset
 from scipy.ndimage.filters import uniform_filter
 
+from data.dataset import get_dataset
+from utils import preprocessing
+
 
 class TFIterableDataset(torch.utils.data.IterableDataset):
     """An IterableDataset interface for a tf.data.Dataset
@@ -35,16 +38,24 @@ class Augment(tf.keras.layers.Layer):
     def __init__(self, seed=42):
         super().__init__()
         # both use the same seed, so they'll make the same randomn changes.
-        self.augment_inputs = tf.keras.Sequential([
-                layers.experimental.preprocessing.RandomFlip("horizontal_and_vertical", seed=seed),
-                #layers.experimental.preprocessing.RandomRotation(0.2),
-                #stddev has to be mathced here!
-                #layers.GaussianNoise(stddev=1)
-            ])
-        self.augment_labels = tf.keras.Sequential([
-                layers.experimental.preprocessing.RandomFlip("horizontal_and_vertical", seed=seed),
-                #layers.experimental.preprocessing.RandomRotation(0.2)
-            ])
+        self.augment_inputs = tf.keras.Sequential(
+            [
+                layers.experimental.preprocessing.RandomFlip(
+                    "horizontal_and_vertical", seed=seed
+                ),
+                # layers.experimental.preprocessing.RandomRotation(0.2),
+                # stddev has to be mathced here!
+                # layers.GaussianNoise(stddev=1)
+            ]
+        )
+        self.augment_labels = tf.keras.Sequential(
+            [
+                layers.experimental.preprocessing.RandomFlip(
+                    "horizontal_and_vertical", seed=seed
+                ),
+                # layers.experimental.preprocessing.RandomRotation(0.2)
+            ]
+        )
 
     def call(self, inputs, labels):
         inputs = self.augment_inputs(inputs)
@@ -55,7 +66,6 @@ class Augment(tf.keras.layers.Layer):
 class Preprocess(tf.keras.layers.Layer):
     def __init__(self, seed=42):
         super().__init__()
-
 
     def call(self, inputs, labels):
 
@@ -74,8 +84,8 @@ class Preprocess(tf.keras.layers.Layer):
         bands = 4
         filtered_input = np.zeros(shape=np.shape(inputs))
         for i in range(bands):
-            filtered_band = self.lee_filter(inputs[:,:,i])
-            filtered_input[:,:,i] = filtered_band
+            filtered_band = self.lee_filter(inputs[:, :, i])
+            filtered_input[:, :, i] = filtered_band
         return tf.convert_to_tensor(filtered_input)
 
     def lee_filter(self, band, window=5, var_noise=0.25):
@@ -99,25 +109,29 @@ class Preprocess(tf.keras.layers.Layer):
         return tf.convert_to_tensor(filtered_input)
 
 
-
 def get_tfrecord_dataloader(
     data_dir_path: str,
     batch_size: int = 8,
+    normalize: bool = False,
     augmentation: bool = False,
-    despeckle: bool = False
+    despeckle: bool = False,
 ):
     # Load the dataset from local storage or GCS
     file_pattern = os.path.join(data_dir_path, "*tfrecord*")
     dataset = get_dataset(file_pattern, include_mso=False)
 
-    # Shuffle the dataset
-    dataset = dataset.shuffle(buffer_size=128, seed=23)
-
     if despeckle:
         dataset = dataset.map(Preprocess())
 
+    if normalize:
+        # Rescale between [0,1] then subtract mean and divide by std
+        dataset = preprocessing.normalize(dataset)
+
     if augmentation:
         dataset = dataset.map(Augment())
+
+    # Shuffle the dataset
+    dataset = dataset.shuffle(buffer_size=128, seed=23)
 
     # Convert to an interable dataset
     iterable_dataset = TFIterableDataset(dataset)

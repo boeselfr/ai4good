@@ -115,7 +115,7 @@ def _make_time_series_with_groundtruth(
 
     image = image.addBands(difference_mask)
 
-    return image.clip(aoi)
+    return image
 
 
 def create_deforestation_detection_dataset(
@@ -214,7 +214,7 @@ def create_deforestation_detection_dataset(
         )
 
         # Sample patches from the time series
-        samples = patch_sampler.sample_image(time_series)
+        samples = patch_sampler.sample_image(time_series, sample_geometry)
 
         # Export as TFRecord
         desc = name + "_" + str(g)
