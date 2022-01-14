@@ -25,7 +25,7 @@ python3 data/create_deforestation_dataset.py \
     --months-before-acquisition 8
 ```
 
-or download it directly from here [TODO: add link to shared folder with dataset](link).
+or download it directly from here [https://polybox.ethz.ch/index.php/s/pcQ6TSYS5nKJx9q](link).
 
 
 ## Training
