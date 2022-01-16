@@ -19,10 +19,10 @@ python3 data/create_deforestation_dataset.py \
     --name <DATASET_NAME> \
     -sd 2020-08-01 \
     -ed 2020-12-31 \
-    --log-scale
-    -aoi sampling_rectangles_2
-    --scale 10
-    --num-samples-per-area 400
+    --log-scale \
+    -aoi sampling_rectangles_2 \
+    --scale 10 \
+    --num-samples-per-area 400 \
     --months-before-acquisition 8
 ```
 
