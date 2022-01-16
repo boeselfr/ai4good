@@ -1,4 +1,4 @@
-# AI4Good HS21 - Group 3b - Deforestation detection monitoring
+# AI4Good HS21 - Group 3b - Rainforest deforestation monitoring
 
 ![good_prediction](./docs/good_prediction.png)
 
